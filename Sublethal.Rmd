@@ -1,0 +1,484 @@
+---
+title: "Sublethal"
+author: "Layla"
+date: "2026-03-25"
+output:
+  word_document: default
+  html_document: default
+  pdf_document: default
+---
+
+## GRAPH 1: Total reproduction per individual vs treatment
+
+```{r}
+
+data <- read.csv("C:/Users/layla/OneDrive/Desktop/Sublethal/data/Sub Lethal Data.csv")
+library(dplyr)
+library(ggplot2)
+library(tidyverse)
+colnames(data) <- trimws(colnames(data))
+colnames(data)
+```
+
+
+
+```{r}
+data <- read.csv("C:/Users/layla/OneDrive/Desktop/Sublethal/data/Sub Lethal Data.csv")
+library(dplyr)
+library(ggplot2)
+library(tidyverse)
+
+colnames(data) <- trimws(colnames(data))
+
+data$Treatment <- trimws(data$Treatment)
+data$Treatment <- gsub("\\s+", " ", data$Treatment)
+
+unique(data$Treatment)
+
+data$Treatment <- recode(data$Treatment,
+                         "0 ppm" = "0",
+                         "1 ppm" = "1",
+                         "2 ppm" = "2",
+                         "10 ppm" = "10")
+
+data$Treatment <- factor(data$Treatment, levels = c("0", "1", "2", "10"))
+
+unique(data$Treatment)
+
+nauplii_cols <- c("Nauplii..1.", "Nauplii..2.", "Nauplii..3.", "Nauplii..4.", "Nauplii..5.")
+
+data[nauplii_cols] <- lapply(data[nauplii_cols], as.numeric)
+data[nauplii_cols][is.na(data[nauplii_cols])] <- 0
+
+individual_totals <- data %>%
+  group_by(Individual.ID, Treatment) %>%
+  summarise(
+    clutch1 = first(Nauplii..1.[Nauplii..1. > 0], default = 0),
+    clutch2 = first(Nauplii..2.[Nauplii..2. > 0], default = 0),
+    clutch3 = first(Nauplii..3.[Nauplii..3. > 0], default = 0),
+    clutch4 = first(Nauplii..4.[Nauplii..4. > 0], default = 0),
+    clutch5 = first(Nauplii..5.[Nauplii..5. > 0], default = 0),
+    total_nauplii = clutch1 + clutch2 + clutch3 + clutch4 + clutch5,
+    .groups = "drop"
+  )
+
+ggplot(individual_totals, aes(x = Treatment, y = total_nauplii)) +
+  geom_jitter(width = 0.2) +
+  labs(
+    title = "Total Reproduction per Individual vs Treatment",
+    x = "Treatment (ppm)",
+    y = "Total Nauplii per Individual"
+  )
+```
+```{r}
+ggplot(individual_totals, aes(x = Treatment, y = total_nauplii)) +
+  geom_boxplot() +
+  geom_jitter(width = 0.2) +
+  labs(
+    title = "Total Reproduction per Individual vs Treatment",
+    x = "Treatment (ppm)",
+    y = "Total Nauplii per Individual"
+  )
+```
+```{r}
+kruskal.test(total_nauplii ~ Treatment, data = individual_totals)
+
+pairwise.wilcox.test(individual_totals$total_nauplii,
+                     individual_totals$Treatment,
+                     p.adjust.method = "bonferroni")
+```
+
+
+## GRAPH 2: Clutch success / number of clutches per individual
+
+```{r}
+
+individual_totals <- individual_totals %>%
+  mutate(
+    num_clutches = (clutch1 > 0) + (clutch2 > 0) + (clutch3 > 0) + (clutch4 > 0) + (clutch5 > 0)
+  )
+
+ggplot(individual_totals, aes(x = factor(Treatment), y = num_clutches)) +
+  geom_boxplot() +
+  geom_jitter(width = 0.2) +
+  labs(
+    title = "Number of Clutches per Individual vs Treatment",
+    x = "Treatment (ppm)",
+    y = "Number of Clutches per Individual"
+  )
+
+```
+```{r}
+individual_totals$Treatment <- factor(individual_totals$Treatment,
+                                      levels = c(0, 1, 2, 10))
+
+kruskal.test(num_clutches ~ Treatment, data = individual_totals)
+pairwise.wilcox.test(individual_totals$num_clutches,
+                     individual_totals$Treatment,
+                     p.adjust.method = "bonferroni",
+                     exact = FALSE)
+```
+## GRAPH 3: Nauplii per clutch (clutch size)
+
+```{r}
+clutch_long <- individual_totals %>%
+  pivot_longer(
+    cols = c(clutch1, clutch2, clutch3, clutch4, clutch5),
+    names_to = "clutch_number",
+    values_to = "nauplii"
+  ) %>%
+  filter(nauplii > 0)
+
+clutch_long$Treatment <- factor(clutch_long$Treatment,
+                                levels = c(0, 1, 2, 10))
+
+ggplot(clutch_long, aes(x = Treatment, y = nauplii)) +
+  geom_boxplot(alpha = 0.5) +
+  labs(
+    title = "Nauplii per Clutch vs Treatment",
+    x = "Treatment (ppm)",
+    y = "Nauplii per Clutch"
+  )
+```
+```{r}
+kruskal.test(nauplii ~ Treatment, data = clutch_long)
+
+# general linear model 
+# negative binomial 
+# poisson 
+# glmmTMB
+
+```
+```{r}
+pairwise.wilcox.test(clutch_long$nauplii,
+                     clutch_long$Treatment,
+                     p.adjust.method = "bonferroni",
+                     exact = FALSE)
+```
+
+## GRAPH 4: Time to reproduction (timing)
+### ( send to slack with david)
+
+```{r}
+data$Date <- as.Date(data$Date, format = "%m/%d/%Y")
+data$Date.of.Transfer <- as.Date(data$Date.of.Transfer, format = "%m/%d/%Y")
+
+clutch_time <- data %>%
+  pivot_longer(
+    cols = c("Nauplii..1.", "Nauplii..2.", "Nauplii..3.", "Nauplii..4.", "Nauplii..5."),
+    names_to = "clutch_number",
+    values_to = "nauplii"
+  ) %>%
+  mutate(
+    nauplii = as.numeric(nauplii),
+    clutch_num = as.numeric(gsub("Nauplii\\.\\.|\\.", "", clutch_number))
+  ) %>%
+  filter(nauplii > 0) %>%
+  group_by(Individual.ID, Treatment, clutch_num) %>%
+  summarise(
+    first_date = min(Date),
+    start_date = min(Date.of.Transfer),
+    .groups = "drop"
+  ) %>%
+  arrange(Individual.ID, clutch_num) %>%
+  group_by(Individual.ID) %>%
+  mutate(
+    interval_days = ifelse(
+      clutch_num == 1,
+      as.numeric(first_date - start_date),
+      as.numeric(first_date - lag(first_date))
+    ),
+    interval_label = case_when(
+      clutch_num == 1 ~ "Transfer to clutch 1",
+      clutch_num == 2 ~ "Clutch 1 to 2",
+      clutch_num == 3 ~ "Clutch 2 to 3",
+      clutch_num == 4 ~ "Clutch 3 to 4",
+      clutch_num == 5 ~ "Clutch 4 to 5"
+    )
+  ) %>%
+  ungroup()
+
+ggplot(clutch_time, aes(x = interval_label, y = interval_days, color = Treatment)) +
+  geom_boxplot(outlier.shape = NA, position = position_dodge(width = 0.75)) +
+  geom_jitter(position = position_jitterdodge(jitter.width = 0.2, dodge.width = 0.75)) +
+  labs(
+    title = "Timing of Reproduction Across Clutches",
+    x = "Reproductive interval",
+    y = "Days",
+    color = "Treatment (ppm)"
+  )
+```
+```{r}
+ggplot(clutch_time, aes(x = Treatment, y = interval_days)) +
+  geom_boxplot() +
+  geom_jitter(width = 0.2) +
+  facet_wrap(~ interval_label) +
+  labs(
+    title = "Reproductive Timing by Treatment",
+    x = "Treatment (ppm)",
+    y = "Days"
+  )
+```
+```{r}
+
+table(clutch_time$interval_label, clutch_time$Treatment)
+
+# Transfer to first clutch
+kruskal.test(interval_days ~ Treatment,
+             data = subset(clutch_time, interval_label == "Transfer to clutch 1"))
+
+# Clutch 1 to 2
+kruskal.test(interval_days ~ Treatment,
+             data = subset(clutch_time, interval_label == "Clutch 1 to 2"))
+
+# Clutch 2 to 3
+kruskal.test(interval_days ~ Treatment,
+             data = subset(clutch_time, interval_label == "Clutch 2 to 3"))
+
+# Clutch 3 to 4
+kruskal.test(interval_days ~ Treatment,
+             data = subset(clutch_time, interval_label == "Clutch 3 to 4"))
+```
+```{r}
+pairwise.wilcox.test(
+  subset(clutch_time, interval_label == "Clutch 3 to 4")$interval_days,
+  subset(clutch_time, interval_label == "Clutch 3 to 4")$Treatment,
+  p.adjust.method = "bonferroni",
+  exact = FALSE
+)
+```
+
+## GRAPH 5: Cumulative reproduction over time ( run this as a GLM)
+
+```{r}
+# make sure dates are correct
+data$Date <- as.Date(data$Date, format = "%m/%d/%Y")
+data$Date.of.Transfer <- as.Date(data$Date.of.Transfer, format = "%m/%d/%Y")
+
+# reshape nauplii data
+cum_data <- data %>%
+  pivot_longer(
+    cols = c("Nauplii..1.", "Nauplii..2.", "Nauplii..3.", "Nauplii..4.", "Nauplii..5."),
+    names_to = "clutch",
+    values_to = "nauplii"
+  ) %>%
+  mutate(nauplii = as.numeric(nauplii)) %>%
+  filter(nauplii > 0)
+
+# keep only FIRST appearance of each clutch
+cum_data <- cum_data %>%
+  group_by(Individual.ID, Treatment, clutch) %>%
+  summarise(
+    clutch_date = min(Date),
+    transfer_date = min(Date.of.Transfer),
+    nauplii = first(nauplii),
+    .groups = "drop"
+  )
+
+# calculate days since transfer
+cum_data <- cum_data %>%
+  mutate(days_since = as.numeric(clutch_date - transfer_date))
+
+# order data and calculate cumulative reproduction per individual
+cum_data <- cum_data %>%
+  arrange(Individual.ID, days_since) %>%
+  group_by(Individual.ID) %>%
+  mutate(cum_nauplii = cumsum(nauplii)) %>%
+  ungroup()
+
+cum_summary <- cum_data %>%
+  group_by(Treatment, days_since) %>%
+  summarise(mean_cum = mean(cum_nauplii), .groups = "drop")
+
+ggplot(cum_summary, aes(x = days_since, y = mean_cum, color = Treatment, group = Treatment)) +
+  geom_line(size = 1) +
+  geom_point() +
+  theme_minimal() +
+  labs(
+    title = "Cumulative Reproduction Over Time",
+    x = "Days Since Transfer",
+    y = "Mean Cumulative Nauplii",
+    color = "Treatment (ppm)"
+  )
+```
+
+## GRAPH 6: Clutch sequence plot
+```{r}
+clutch_mean <- clutch_long %>%
+  group_by(Treatment, clutch_number) %>%
+  summarise(mean_nauplii = mean(nauplii), .groups = "drop")
+
+clutch_mean$clutch_number <- factor(clutch_mean$clutch_number,
+                                    levels = c("clutch1", "clutch2", "clutch3", "clutch4", "clutch5"),
+                                    labels = c("1", "2", "3", "4", "5"))
+
+ggplot(clutch_mean, aes(x = clutch_number, y = mean_nauplii, color = Treatment, group = Treatment)) +
+  geom_line() +
+  geom_point() +
+  labs(
+    title = "Clutch Sequence Plot",
+    x = "Clutch Number",
+    y = "Mean Nauplii per Clutch",
+    color = "Treatment (ppm)"
+  )
+```
+```{r}
+clutch_long$clutch_number <- factor(clutch_long$clutch_number,
+                                    levels = c("clutch1", "clutch2", "clutch3", "clutch4", "clutch5"),
+                                    labels = c("1", "2", "3", "4", "5"))
+
+ggplot(clutch_long, aes(x = clutch_number, y = nauplii, group = Individual.ID, color = Treatment)) +
+  geom_line(alpha = 0.4) +
+  geom_point() +
+  labs(
+    title = "Clutch Sequence Plot by Individual",
+    x = "Clutch Number",
+    y = "Nauplii per Clutch",
+    color = "Treatment (ppm)"
+  )
+
+```
+
+## Running the model 
+
+```{r}
+names(data)
+head(data)
+data$Date <- as.Date(data$Date, format = "%m/%d/%Y")
+data$Death.Date..if.before.21.days. <- as.Date(
+  data$Death.Date..if.before.21.days.,
+  format = "%m/%d/%Y"
+)
+
+# Build the offspring columns
+nauplii_cols <- c("Nauplii..1.", "Nauplii..2.", "Nauplii..3.", "Nauplii..4.", "Nauplii..5.")
+
+data[nauplii_cols] <- lapply(data[nauplii_cols], as.numeric)
+
+data$cum_offspring <- rowSums(data[nauplii_cols], na.rm = TRUE)
+
+# Sort by individual and date
+data <- data[order(data$Individual.ID, data$Date), ]
+
+#Create offspring produced at each observation
+data$all_egg <- ave(
+  data$cum_offspring,
+  data$Individual.ID,
+  FUN = function(x) c(x[1], diff(x))
+)
+
+data$all_egg[is.na(data$all_egg)] <- 0
+data$all_egg[data$all_egg < 0] <- 0
+
+# Create age in days
+data$week <- ave(
+  as.numeric(data$Date),
+  data$Individual.ID,
+  FUN = function(x) x - min(x)
+)
+
+# Create alive/dead status
+data$Alive <- ifelse(
+  !is.na(data$Death.Date..if.before.21.days.) &
+    data$Date >= data$Death.Date..if.before.21.days.,
+  0,
+  1
+)
+
+#Create the ID column the model expects
+data$snail_id <- data$Individual.ID
+
+#Keep only the needed columns
+life_table_data <- data[, c("week", "snail_id", "all_egg", "Alive", "Treatment")]
+
+head(life_table_data)
+str(life_table_data)
+
+#Clean treatment values
+life_table_data$Treatment <- trimws(life_table_data$Treatment)
+life_table_data$Treatment <- gsub("\\s+", " ", life_table_data$Treatment)
+
+unique(life_table_data$Treatment)
+
+#split by treatment
+treat_0 <- subset(life_table_data, Treatment == 0)
+treat_1 <- subset(life_table_data, Treatment == 1)
+treat_2 <- subset(life_table_data, Treatment == 2)
+treat_10 <- subset(life_table_data, Treatment == 10)
+
+```
+
+- Issue  the date of the experiment is not he same thing as the age of the orgaizm, so for the day columb we need the age of the animel ( find that in phase 1-2)
+
+- s there evidance that there are individuals with egg sacks and never the naplei after ( calukate the perportion of lost clutches)
+
+- trading off current reproduction for future self preservation and survival 
+
+- Three columbs, ID, #wihc clutch, sussess or failure (where nap present)
+
+```{r}
+# Run the little-r model
+
+Euler <- function(r, lx_times_mx, time){
+  sum(lx_times_mx * exp(-r * time)) - 1
+}
+
+little.r <- function(treatment_dataset){
+  lx_and_week <- aggregate(Alive ~ week, FUN = mean, data = treatment_dataset, drop = FALSE)
+  time <- as.numeric(lx_and_week[, 1])
+  lx <- as.numeric(lx_and_week[, 2])
+
+  mx <- as.numeric(aggregate(all_egg ~ week, FUN = mean, data = treatment_dataset, drop = FALSE)[, 2])
+  mx[!is.finite(mx)] <- 0
+
+  lx_times_mx <- lx * mx
+
+  uniroot(Euler,
+          interval = c(-10, 10),
+          lx_times_mx = lx_times_mx,
+          time = time)$root
+}
+
+little.r(treat_0)
+little.r(treat_1)
+little.r(treat_2)
+little.r(treat_10)
+```
+```{r}
+head(life_table_data)
+summary(life_table_data)
+table(life_table_data$Alive, useNA = "ifany")
+```
+The intrinsic rate of increase (r) declined with increasing treatment concentration. Control (0 ppm) and low exposure (1 ppm) treatments showed similar population growth rates (~2.67), while moderate exposure (2 ppm) caused a slight reduction (2.55). The highest treatment (10 ppm) resulted in a substantial decrease in population growth (1.76), indicating strong negative effects on survival and/or reproduction.
+
+```{r}
+hist(little.r.CIs(treat_0, 1000))
+hist(little.r.CIs(treat_10, 1000))
+quantile(little.r.CIs(treat_0, 1000), c(0.025, 0.975))
+```
+```{r}
+quantile(little.r.CIs(treat_0, 1000), c(0.025, 0.975))
+quantile(little.r.CIs(treat_1, 1000), c(0.025, 0.975))
+quantile(little.r.CIs(treat_2, 1000), c(0.025, 0.975))
+quantile(little.r.CIs(treat_10, 1000), c(0.025, 0.975))
+```
+```{r}
+results <- data.frame(
+  Treatment = c("0 ppm", "1 ppm", "2 ppm", "10 ppm"),
+  lower = c(1.816, 2.009, 1.249, 1.266),
+  upper = c(3.190, 3.091, 3.159, 2.212),
+  mean = c(2.674, 2.675, 2.545, 1.760)
+)
+
+plot(1:4, results$mean,
+     ylim = c(1, 3.5),
+     xaxt = "n",
+     xlab = "Treatment",
+     ylab = "r")
+
+axis(1, at = 1:4, labels = results$Treatment)
+
+arrows(1:4, results$lower, 1:4, results$upper, angle = 90, code = 3, length = 0.05)
+```
+
+
