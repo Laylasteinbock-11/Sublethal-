@@ -1,0 +1,409 @@
+---
+title: 'Model #2'
+author: "Layla"
+date: "2026-04-27"
+output: html_document
+---
+
+# data cleaning and organizing
+
+```{r}
+# load libraries 
+
+data <- read.csv("C:/Users/layla/OneDrive/Desktop/Sublethal/data/Sub Lethal Data.csv")
+library(dplyr)
+library(ggplot2)
+library(tidyverse)
+colnames(data) <- trimws(colnames(data))
+colnames(data)
+names(data)
+head(data)
+```
+
+
+```{r}
+# Enter Phase 1 case information
+
+phase1_cases <- data.frame(
+  Treatment_phase1 = c(
+    rep("0 ppm", 6),
+    rep("1 ppm", 6),
+    rep("2 ppm", 6),
+    rep("10 ppm", 6)
+  ),
+  Case....Beaker.of.origin. = c(
+    4, 1, 6, 3, 5, 2,
+    9, 12, 7, 11, 10, 8,
+    16, 14, 18, 13, 17, 15,
+    22, 19, 24, 21, 20, 23
+  ),
+  Date.Started = as.Date(c(
+    "2026-02-04", "2026-02-05", "2026-02-05",
+    "2026-02-04", "2026-02-04", "2026-02-04",
+    "2026-02-05", "2026-02-04", "2026-02-04",
+    "2026-02-04", "2026-02-04", "2026-02-05",
+    "2026-02-04", "2026-02-04", "2026-02-04",
+    "2026-02-04", "2026-02-05", "2026-02-05",
+    "2026-02-04", "2026-02-04", "2026-02-05",
+    "2026-02-05", "2026-02-04", "2026-02-04"
+  ))
+)
+
+```
+
+
+
+```{r}
+# Read Phase 2 data
+
+data$Date <- as.Date(data$Date, format = "%m/%d/%Y")
+data$Date.of.Transfer <- as.Date(data$Date.of.Transfer, format = "%m/%d/%Y")
+data$Death.Date..if.before.21.days. <- as.Date(
+  data$Death.Date..if.before.21.days.,
+  format = "%m/%d/%Y"
+)
+```
+
+
+```{r}
+# Merge Phase 1 case information into the main data
+
+data <- merge(
+  data,
+  phase1_cases,
+  by = "Case....Beaker.of.origin.",
+  all.x = TRUE
+)
+
+head(data[, c("Individual.ID", 
+              "Case....Beaker.of.origin.", 
+              "Treatment", 
+              "Treatment_phase1", 
+              "Date", 
+              "Date.Started")])
+
+
+```
+
+```{r}
+# Create age of the organism since treatment started
+
+data$age_day <- as.numeric(data$Date - data$Date.Started)
+
+head(data[, c("Individual.ID", 
+              "Case....Beaker.of.origin.", 
+              "Date", 
+              "Date.Started", 
+              "age_day")])
+
+# Create alive/dead status
+
+data$Alive <- ifelse(
+  !is.na(data$Death.Date..if.before.21.days.) &
+    data$Date >= data$Death.Date..if.before.21.days.,
+  0,
+  1
+)
+
+```
+```{r}
+# Build offspring columns
+
+nauplii_cols <- c("Nauplii..1.", 
+                  "Nauplii..2.", 
+                  "Nauplii..3.", 
+                  "Nauplii..4.", 
+                  "Nauplii..5.")
+
+data[nauplii_cols] <- lapply(data[nauplii_cols], as.numeric)
+
+data$cum_offspring <- rowSums(data[nauplii_cols], na.rm = TRUE)
+
+data <- data[order(data$Individual.ID, data$Date), ]
+
+data$all_egg <- ave(
+  data$cum_offspring,
+  data$Individual.ID,
+  FUN = function(x) c(x[1], diff(x))
+)
+
+data$all_egg[is.na(data$all_egg)] <- 0
+data$all_egg[data$all_egg < 0] <- 0
+
+data$Treatment <- data$Treatment_phase1
+
+```
+
+
+
+```{r}
+
+# Create clean life table dataset using TRUE biological age
+
+data$days_since_treatment <- as.numeric(data$Date - data$Date.Started)
+
+# organisms were already 12 days old when treatment began
+data$true_age_day <- data$days_since_treatment + 12
+
+life_table_data <- data.frame(
+  age_day = data$true_age_day,
+  exposure_day = data$days_since_treatment,
+  ID = data$Individual.ID,
+  reproduction = data$all_egg,
+  Alive = data$Alive,
+  Treatment = data$Treatment,
+  Date.Started = data$Date.Started,
+  Death.Date = data$Death.Date..if.before.21.days.
+)
+
+life_table_data <- life_table_data %>%
+  filter(!is.na(age_day))
+
+```
+
+
+
+```{r}
+# Expand data to include all TRUE biological ages
+
+min_age <- 12
+max_age <- max(life_table_data$age_day, na.rm = TRUE)
+
+life_table_full <- life_table_data %>%
+  group_by(ID, Treatment) %>%
+  complete(age_day = min_age:max_age) %>%
+  fill(Date.Started, Death.Date, .direction = "downup") %>%
+  mutate(
+    exposure_day = age_day - 12,
+    current_date = Date.Started + exposure_day,
+    reproduction = ifelse(is.na(reproduction), 0, reproduction),
+    Alive = ifelse(
+      !is.na(Death.Date) & current_date >= Death.Date,
+      0,
+      1
+    )
+  ) %>%
+  ungroup()
+```
+
+```{r}
+# Build life table summary
+
+life_table_summary <- life_table_full %>%
+  group_by(Treatment, age_day) %>%
+  summarise(
+    K0 = n_distinct(ID),
+    Kx = sum(Alive == 1, na.rm = TRUE),
+    births = sum(reproduction, na.rm = TRUE),
+    mx = ifelse(Kx > 0, births / Kx, NA),
+    .groups = "drop"
+  ) %>%
+  group_by(Treatment) %>%
+  arrange(age_day, .by_group = TRUE) %>%
+  mutate(
+    lx = Kx / K0,
+    dx = Kx - lead(Kx),
+    qx = ifelse(Kx > 0, dx / Kx, NA),
+    px = 1 - qx
+  ) %>%
+  ungroup()
+```
+
+
+
+```{r}
+# Get the real starting cohort size for each treatment
+cohort_size <- life_table_full %>%
+  group_by(Treatment) %>%
+  summarise(
+    K0 = n_distinct(ID),
+    .groups = "drop"
+  )
+# give the max life span 
+max_age <- max(life_table_data$age_day, na.rm = TRUE)
+
+# create an age range and orgize the wya age is formatted 
+
+life_table_full <- life_table_data %>%
+  group_by(ID, Treatment) %>%
+  complete(age_day = 0:max_age) %>%
+  fill(Date.Started, Death.Date, .direction = "downup") %>%
+  mutate(
+    current_date = Date.Started + age_day,
+    reproduction = ifelse(is.na(reproduction), 0, reproduction),
+    Alive = ifelse(
+      !is.na(Death.Date) & current_date >= Death.Date,
+      0,
+      1
+    )
+  ) %>%
+  ungroup()
+
+```
+
+# Model visualizations
+
+
+```{r}
+life_table_summary %>%
+  group_by(Treatment) %>%
+  summarise(
+    start_lx = first(lx),
+    end_lx = last(lx),
+    .groups = "drop"
+  )
+```
+## survival curve
+
+```{r}
+ggplot(life_table_summary, aes(x = age_day, y = lx, color = Treatment)) +
+  geom_step(linewidth = 1) +
+  labs(
+    title = "Survival Curves",
+    x = "Age (days)",
+    y = "Proportion Alive (lx)"
+  )
+
+```
+## treatmeant R
+
+```{r}
+Euler <- function(r, lx, mx, time){
+  sum(lx * mx * exp(-r * time)) - 1
+}
+
+calc_r <- function(df){
+  uniroot(
+    function(r) Euler(r, df$lx, df$mx, df$age_day),
+    interval = c(-1, 1)
+  )$root
+}
+
+r_results <- life_table_summary %>%
+  group_by(Treatment) %>%
+  group_modify(~ data.frame(r = calc_r(.x)))
+
+r_results
+```
+
+## R0 
+```{r}
+R0_results <- life_table_summary %>%
+  group_by(Treatment) %>%
+  summarise(
+    R0 = sum(lx * mx, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+R0_results
+```
+## Intrinsic growht rate by treatment 
+
+```{r}
+calc_r_individual <- function(df){
+  Euler <- function(r, lx, mx, time){
+    sum(lx * mx * exp(-r * time)) - 1
+  }
+
+  # build lx and mx for ONE individual
+  lx <- df$Alive
+  mx <- df$reproduction
+  time <- df$age_day
+
+  # avoid all-zero reproduction cases
+  if(sum(mx) == 0) return(NA)
+
+  tryCatch({
+    uniroot(
+      function(r) Euler(r, lx, mx, time),
+      interval = c(-1, 1)
+    )$root
+  }, error = function(e) NA)
+}
+
+r_individual <- life_table_full %>%
+  group_by(Treatment, ID) %>%
+  group_modify(~ data.frame(r = calc_r_individual(.x))) %>%
+  ungroup()
+
+r_summary <- r_individual %>%
+  group_by(Treatment) %>%
+  summarise(
+    mean_r = mean(r, na.rm = TRUE),
+    sd_r = sd(r, na.rm = TRUE),
+    se_r = sd_r / sqrt(n()),
+    .groups = "drop"
+  )
+
+ggplot(r_summary, aes(x = Treatment, y = mean_r)) +
+  geom_point(size = 3) +
+  geom_errorbar(aes(ymin = mean_r - se_r, ymax = mean_r + se_r), width = 0.2) +
+  labs(
+    title = "Intrinsic Growth Rate (r) by Treatment",
+    x = "Treatment",
+    y = "r"
+  )
+```
+
+## Graph lx * mx by age
+
+```{r}
+life_table_summary <- life_table_summary %>%
+  mutate(lx_mx = lx * mx)
+
+ggplot(life_table_summary, aes(x = age_day, y = lx_mx, color = Treatment)) +
+  geom_point() +
+  geom_line(alpha = 0.5) +
+  labs(
+    title = "Age-specific Contribution to Reproduction",
+    x = "Age (days)",
+    y = "lx * mx"
+  )
+```
+## Compare total reproduction per individual
+
+```{r}
+individual_reproduction <- life_table_full %>%
+  group_by(Treatment, ID) %>%
+  summarise(
+    total_reproduction = sum(reproduction, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+ggplot(individual_reproduction, aes(x = Treatment, y = total_reproduction)) +
+  geom_boxplot() +
+  geom_jitter(width = 0.2) +
+  labs(
+    title = "Total Reproduction per Individual",
+    x = "Treatment",
+    y = "Total Offspring"
+  )
+
+kruskal.test(total_reproduction ~ Treatment, data = individual_reproduction)
+```
+## Compare lifespan/survival by treatment
+
+```{r}
+individual_survival <- life_table_full %>%
+  group_by(Treatment, ID) %>%
+  summarise(
+    last_alive_age = max(age_day[Alive == 1], na.rm = TRUE),
+    .groups = "drop"
+  )
+
+ggplot(individual_survival, aes(x = Treatment, y = last_alive_age)) +
+  geom_boxplot() +
+  geom_jitter(width = 0.2) +
+  labs(
+    title = "Survival Duration by Treatment",
+    x = "Treatment",
+    y = "Last Age Alive"
+  )
+
+kruskal.test(last_alive_age ~ Treatment, data = individual_survival)
+```
+
+# Data Analysis 
+
+Across all treatments, survival remained high and relatively similar, with most individuals living to the end of the experiment, indicating that the treatment did not strongly affect mortality. However, reproduction showed clear differences among treatments, with the control (0 ppm) having the highest and most consistent reproductive output, while higher concentrations (especially 10 ppm) showed reduced and more variable reproduction. The timing of reproduction also shifted, as individuals in higher treatments tended to reproduce later and less consistently, which was evident in the lx·mx plots. These changes in both the amount and timing of reproduction led to lower net reproductive rates (R₀) and reduced intrinsic growth rates (r) in higher treatments. Overall, the results show that the treatment has a sublethal effect, primarily impacting reproduction and population growth rather than survival.
+# Nextsteps 
